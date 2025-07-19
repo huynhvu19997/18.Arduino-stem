@@ -1,0 +1,131 @@
+####### chương trình arduino #####
+#include <ComputerLink.h>
+
+ComputerLink plc(Serial, 2); // Serial, DE pin = 2
+
+unsigned long lastWriteTime = 0;
+bool hasWrittenOne = false;
+
+void setup() {
+  Serial.begin(9600);
+  plc.begin(9600, 1); // Baudrate, Station No.
+}
+
+void loop() {
+  if (!hasWrittenOne) {
+    // Ghi giá trị 1 vào D0
+    if (plc.writeD(0, 1)) {
+      Serial.println("Đã ghi 1 vào D0");
+      lastWriteTime = millis();
+      hasWrittenOne = true;
+    } else {
+      Serial.println("Lỗi ghi 1 vào D0");
+    }
+  } else {
+    // Sau 10 giây, ghi giá trị 0 vào D0
+    if (millis() - lastWriteTime >= 10000) {
+      if (plc.writeD(0, 0)) {
+        Serial.println("Đã ghi 0 vào D0 sau 10 giây");
+      } else {
+        Serial.println("Lỗi ghi 0 vào D0");
+      }
+      hasWrittenOne = false; // Reset để có thể lặp lại nếu cần
+    }
+  }
+}
+
+######### chương trình "ComputerLink.h" ##########
+#ifndef COMPUTERLINK_H
+#define COMPUTERLINK_H
+
+#include <Arduino.h>
+
+class ComputerLink {
+public:
+  ComputerLink(HardwareSerial &serial, uint8_t dePin);
+  void begin(long baudrate, uint8_t stationNo);
+  bool readD(uint16_t address, uint16_t &value);
+  bool writeD(uint16_t address, uint16_t value);
+
+private:
+  HardwareSerial &_serial;
+  uint8_t _dePin;
+  uint8_t _stationNo;
+
+  void sendCommand(const String &cmd);
+  bool receiveResponse(String &response);
+  uint8_t calculateBCC(const String &data);
+};
+
+#endif
+
+###### chương trình "Computerlink.Cpp"" ###########################
+#include "ComputerLink.h"
+
+ComputerLink::ComputerLink(HardwareSerial &serial, uint8_t dePin)
+  : _serial(serial), _dePin(dePin) {}
+
+void ComputerLink::begin(long baudrate, uint8_t stationNo) {
+  pinMode(_dePin, OUTPUT);
+  digitalWrite(_dePin, LOW);
+  _serial.begin(baudrate);
+  _stationNo = stationNo;
+}
+
+bool ComputerLink::readD(uint16_t address, uint16_t &value) {
+  char cmd[20];
+  sprintf(cmd, "RD D%04u", address);
+  sendCommand(String(cmd));
+
+  String response;
+  if (receiveResponse(response)) {
+    value = response.substring(0, 4).toInt();
+    return true;
+  }
+  return false;
+}
+
+bool ComputerLink::writeD(uint16_t address, uint16_t value) {
+  char cmd[30];
+  sprintf(cmd, "WD D%04u %04u", address, value);
+  sendCommand(String(cmd));
+
+  String response;
+  return receiveResponse(response);
+}
+
+void ComputerLink::sendCommand(const String &cmd) {
+  String frame = String(char(0x05)); // ENQ
+  frame += String(_stationNo);
+  frame += cmd;
+  frame += String(char(calculateBCC(cmd)));
+  frame += String('\r');
+
+  digitalWrite(_dePin, HIGH);
+  delay(2);
+  _serial.print(frame);
+  _serial.flush();
+  delay(2);
+  digitalWrite(_dePin, LOW);
+}
+
+bool ComputerLink::receiveResponse(String &response) {
+  response = "";
+  uint32_t start = millis();
+  while (millis() - start < 1000) {
+    if (_serial.available()) {
+      char c = _serial.read();
+      if (c == '\r') break;
+      response += c;
+    }
+  }
+  return response.length() > 0;
+}
+
+uint8_t ComputerLink::calculateBCC(const String &data) {
+  uint8_t bcc = 0;
+  for (size_t i = 0; i < data.length(); i++) {
+    bcc ^= data[i];
+  }
+  return bcc;
+}
